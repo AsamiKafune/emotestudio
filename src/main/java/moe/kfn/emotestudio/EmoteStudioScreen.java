@@ -320,6 +320,10 @@ public final class EmoteStudioScreen extends ModularUIScreen {
         void openDialog(boolean asActor) {
             Dialog dialog = new Dialog().setAutoClose(false).setClickOutsideClose(true);
             List<String> files = EmoteStudioClient.files();
+            Map<String, Emote> infos = new HashMap<>();
+            for (String f : files) {
+                try { infos.put(f, EmoteStudioClient.read(f)); } catch (IOException | RuntimeException ignored) {}
+            }
             dialog.setTitle((asActor ? "Import Character" : "Open Emote") + "  (" + files.size() + " in emotes folder)");
             var window = Minecraft.getInstance().getWindow();
             int listHeight = Math.clamp(window.getGuiScaledHeight() - 130, 60, 260);
@@ -332,9 +336,17 @@ public final class EmoteStudioScreen extends ModularUIScreen {
                 list.viewContainer.clearAllChildren();
                 String query = search.getText().trim().toLowerCase(Locale.ROOT);
                 for (String f : files) {
-                    if (!query.isEmpty() && !f.toLowerCase(Locale.ROOT).contains(query)) continue;
+                    Emote info = infos.get(f);
+                    String display = info == null ? "" : info.name;
+                    if (!query.isEmpty() && !f.toLowerCase(Locale.ROOT).contains(query) && !display.toLowerCase(Locale.ROOT).contains(query)) continue;
                     UIElement row = new UIElement().layout(l -> l.widthPercent(100).height(20).flexDirection(FlexDirection.ROW).alignItems(AlignItems.CENTER).gapAll(2));
                     Label label = new Label(); label.setText(f);
+                    if (info != null) {
+                        List<Component> tip = new ArrayList<>(List.of(Component.literal(display)));
+                        if (!info.description.isBlank())
+                            for (String line : info.description.split("\n")) tip.add(Component.literal(line).withStyle(net.minecraft.ChatFormatting.GRAY));
+                        label.style(s -> s.tooltips(tip.toArray(Component[]::new)));
+                    }
                     label.layout(l -> l.flex(1).heightPercent(100));
                     label.textStyle(s -> s.adaptiveWidth(false).textAlignHorizontal(Horizontal.LEFT).textAlignVertical(Vertical.CENTER));
                     Button open = new Button().setText(asActor ? "Import" : "Open").setOnClick(e -> {

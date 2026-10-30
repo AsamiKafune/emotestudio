@@ -1839,26 +1839,43 @@ public final class EmoteStudioScreen extends ModularUIScreen {
         void drawBox(VertexConsumer vc, PoseStack.Pose pose, String p, float grow, int u, int v) {
             float[] b = cuboid(p);
             Matrix4f[] h = halves(p);
-            boolean torso = p.equals("torso"), bends = Emote.groups(p).contains(Group.BEND);
-            float w = b[3] - b[0], ht = b[4] - b[1], d = b[5] - b[2], mid = (b[1] + b[4]) / 2, y0 = b[1] - grow, y1 = b[4] + grow;
+            boolean bends = Emote.groups(p).contains(Group.BEND);
+            float w = b[3] - b[0], ht = b[4] - b[1], d = b[5] - b[2], y0 = b[1] - grow, y1 = b[4] + grow, half = (y1 - y0) / 2;
             float[][] rect = {{u + d, v, u + d + w, v + d}, {u + d + w, v + d, u + d + 2 * w, v}, {u, v + d, u + d, v + d + ht},
                     {u + d, v + d, u + d + w, v + d + ht}, {u + d + w, v + d, u + 2 * d + w, v + d + ht}, {u + 2 * d + w, v + d, u + 2 * d + 2 * w, v + d + ht}};
-            float cut = bends ? (mid - y0) / (y1 - y0) : 1;
-            for (int f = 0; f < 6; f++)
-                for (float[] span : f < 2 ? new float[][]{{0, 1}} : new float[][]{{0, cut}, {cut, 1}}) {
-                    if (span[1] - span[0] < 1e-4F) continue;
+            Vector3f c = middle(b), along = new Vector3f(0, p.equals("torso") ? -1 : 1, 0), across = new Vector3f();
+            float tan = 0;
+            if (bends) {
+                float[] bend = bendOf(p);
+                bendAxis(p, bend[1]).cross(along, across);
+                tan = Math.clamp((float) Math.tan(rad(bend[0]) / 2), -8F, 8F);
+            }
+            for (int f = 0; f < 6; f++) {
+                Vector3f[] corner = new Vector3f[4], uv = new Vector3f[4];
+                for (int i = 0; i < 4; i++) {
+                    int k = FACES[f][i];
+                    corner[i] = new Vector3f((k & 1) == 0 ? b[0] - grow : b[3] + grow, (k & 2) == 0 ? y0 : y1, (k & 4) == 0 ? b[2] - grow : b[5] + grow);
+                    uv[i] = new Vector3f(i == 0 || i == 3 ? rect[f][2] : rect[f][0], f < 2 ? (i < 2 ? rect[f][1] : rect[f][3]) : (k & 2) == 0 ? rect[f][1] : rect[f][3], 0);
+                }
+                int ns = cells(uv[0], uv[1]), nr = cells(uv[1], uv[2]);
+                for (int s = 0; s < ns; s++) for (int r = 0; r < nr; r++)
                     for (int i = 0; i < 4; i++) {
-                        int c = FACES[f][i];
-                        float fy = (c & 2) == 0 ? span[0] : span[1], y = y0 + fy * (y1 - y0);
-                        Matrix4f m = Math.abs(y - mid) < 1e-4F ? h[1] : (y < mid) == torso ? h[2] : h[0];
-                        Vector3f at = m.transformPosition(new Vector3f((c & 1) == 0 ? b[0] - grow : b[3] + grow, y, (c & 4) == 0 ? b[2] - grow : b[5] + grow));
+                        float fs = (s + (i == 1 || i == 2 ? 1 : 0)) / (float) ns, fr = (r + (i >= 2 ? 1 : 0)) / (float) nr;
+                        Vector3f at = bilerp(corner, fs, fr), tex = bilerp(uv, fs, fr), rel = new Vector3f(at).sub(c);
+                        float t = rel.dot(along);
+                        boolean moving = bends && t > 1e-4F;
+                        if (bends) at.fma((moving ? 1 : -1) * tan * rel.dot(across) * (half - Math.abs(t)) / half, along);
+                        Matrix4f m = moving ? h[2] : h[0];
+                        m.transformPosition(at);
                         Vector3f n = m.transformDirection(new Vector3f(NORMALS[f])).normalize();
-                        float tu = i == 0 || i == 3 ? rect[f][2] : rect[f][0];
-                        float tv = f < 2 ? (i < 2 ? rect[f][1] : rect[f][3]) : rect[f][1] + fy * (rect[f][3] - rect[f][1]);
-                        vc.addVertex(pose, at.x, at.y, at.z).setColor(tint).setUv(tu / 64, tv / 64).setOverlay(OverlayTexture.NO_OVERLAY)
+                        vc.addVertex(pose, at.x, at.y, at.z).setColor(tint).setUv(tex.x / 64, tex.y / 64).setOverlay(OverlayTexture.NO_OVERLAY)
                                 .setLight(LightTexture.FULL_BRIGHT).setNormal(pose, n.x, n.y, n.z);
                     }
-                }
+            }
+        }
+        static int cells(Vector3f a, Vector3f b) { return Math.max(1, Math.round(Math.max(Math.abs(b.x - a.x), Math.abs(b.y - a.y)))); }
+        static Vector3f bilerp(Vector3f[] q, float s, float r) {
+            return new Vector3f(q[0]).lerp(q[1], s).lerp(new Vector3f(q[3]).lerp(q[2], s), r);
         }
         static final float[] SWORD = {-10.5F, -2.5F, 7.5F, 10.5F, 2.5F, 8.5F};
         static final float[] PAPER = {-7, -7, 7.5F, 7, 7, 8.5F}, BLOCK = {-8, -8, 0, 8, 8, 16};

@@ -68,6 +68,7 @@ import org.lwjgl.glfw.GLFW;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
@@ -91,7 +92,8 @@ public final class EmoteStudioScreen extends ModularUIScreen {
     private final Screen parent;
     private final StudioEditor editor;
 
-    public static void open(String file) {
+    public static void open(String file) { open(file, true); }
+    static void open(String file, boolean dialog) {
         Minecraft mc = Minecraft.getInstance();
         Emote emote = null;
         String error = null, name = file == null ? null : EmoteStudioClient.fileName(file);
@@ -108,8 +110,33 @@ public final class EmoteStudioScreen extends ModularUIScreen {
         ModularUI ui = ModularUI.of(UI.of(window, StylesheetManager.ORE), mc.player);
         mc.setScreen(new EmoteStudioScreen(ui, ref[0], parent));
         if (error != null) ref[0].notice(error);
-        else if (file == null) ref[0].openDialog();
+        else if (file == null && dialog) ref[0].openDialog();
     }
+
+    public static Object mcp(String tool, JsonObject a) throws IOException {
+        if (tool.equals("list_emotes")) {
+            JsonArray list = new JsonArray();
+            for (String f : EmoteStudioClient.files()) {
+                JsonObject o = new JsonObject();
+                o.addProperty("file", f);
+                try { Emote e = EmoteStudioClient.read(f); o.addProperty("name", e.name); o.addProperty("description", e.description); }
+                catch (IOException | RuntimeException e) { o.addProperty("error", String.valueOf(e.getMessage())); }
+                list.add(o);
+            }
+            return list;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (!(mc.screen instanceof EmoteStudioScreen)) open(null, false);
+        return ((EmoteStudioScreen) mc.screen).editor.mcp(tool, a);
+    }
+    static boolean has(JsonObject a, String k) { return a.get(k) != null && !a.get(k).isJsonNull(); }
+    static JsonElement need(JsonObject a, String k) {
+        if (!has(a, k)) throw new IllegalArgumentException("missing " + k);
+        return a.get(k);
+    }
+    static String str(JsonObject a, String k) { return has(a, k) ? a.get(k).getAsString() : null; }
+    static int num(JsonObject a, String k) { return need(a, k).getAsInt(); }
+    static boolean flag(JsonObject a, String k) { return has(a, k) && a.get(k).getAsBoolean(); }
 
     static Emote blank() {
         Emote e = new Emote();
@@ -576,14 +603,15 @@ public final class EmoteStudioScreen extends ModularUIScreen {
         }
         void removeActor(int i) {
             if (i <= 0 || i >= cast.size()) return;
-            confirm("Remove P" + (i + 1) + " (" + cast.get(i).name + ") from the scene?", "Remove", () -> {
-                cast.remove(i);
-                if (i < looks.size()) looks.remove(i);
-                preview.focus = -1;
-                actor = 0; emote = cast.getFirst();
-                picked.clear(); selectedKey = null; linkTick = null;
-                changed(); inspect();
-            });
+            confirm("Remove P" + (i + 1) + " (" + cast.get(i).name + ") from the scene?", "Remove", () -> dropActor(i));
+        }
+        void dropActor(int i) {
+            cast.remove(i);
+            if (i < looks.size()) looks.remove(i);
+            preview.focus = -1;
+            actor = 0; emote = cast.getFirst();
+            picked.clear(); selectedKey = null; linkTick = null;
+            changed(); inspect();
         }
 
 
@@ -1116,6 +1144,11 @@ public final class EmoteStudioScreen extends ModularUIScreen {
                 Arrays.stream(Ease.values()).map(Ease::name)).toList();
         static String easeName(String ease) { return Emote.CUSTOM.equals(ease) ? Emote.CUSTOM : Easing.easeFromString(ease).name(); }
         void setKeyEase(List<Emote.Key> keys, Emote.Key k, String ease) {
+            easeKey(keys, k, ease);
+            syncLinked(part, channel, k);
+            changed();
+        }
+        static void easeKey(List<Emote.Key> keys, Emote.Key k, String ease) {
             if (ease.equals(Emote.CUSTOM) && !k.custom()) {
                 int index = keys.indexOf(k);
                 if (index >= 0 && index + 1 < keys.size()) {
@@ -1125,8 +1158,6 @@ public final class EmoteStudioScreen extends ModularUIScreen {
                 }
             }
             k.ease = ease;
-            syncLinked(part, channel, k);
-            changed();
         }
 
         void handle(UIElement lane, Emote.Key k, boolean out, float span, java.util.function.DoubleUnaryOperator y, double min, double max) {
@@ -1220,6 +1251,14 @@ public final class EmoteStudioScreen extends ModularUIScreen {
         static String amp(String text) { return text.replace('§', '&'); }
         static String section(String text) { return text.replaceAll("&([0-9a-fk-orA-FK-OR])", "§$1"); }
         boolean holds() { return emote.loop && emote.returnTick == emote.end; }
+        void setHold(boolean v) {
+            if (v) {
+                int last = emote.keys.values().stream().flatMap(c -> c.values().stream()).flatMap(List::stream).mapToInt(k -> k.tick).max().orElse(emote.end);
+                emote.stop += Math.max(1, last) - emote.end;
+                emote.end = Math.max(1, last);
+            }
+            emote.loop = v; emote.returnTick = v ? emote.end : 0; changed(); inspect();
+        }
         void buildEmote(ConfiguratorGroup group) {
             String who = "P" + (actor + 1);
             boolean duet = cast.size() > 1;
@@ -1235,14 +1274,7 @@ public final class EmoteStudioScreen extends ModularUIScreen {
             timing.addConfigurator(integer("Begin Tick", 0, 72000, () -> emote.begin, v -> emote.begin = v));
             timing.addConfigurator(integer("End Tick", 1, 72000, () -> emote.end, v -> { boolean hold = holds(); emote.end = v; if (hold) emote.returnTick = v; }));
             timing.addConfigurator(integer("Stop Tick (fade out)", 1, 72000, () -> emote.stop, v -> emote.stop = v));
-            timing.addConfigurator(new BooleanConfigurator("Hold Last Frame (export)", this::holds, v -> {
-                if (v) {
-                    int last = emote.keys.values().stream().flatMap(c -> c.values().stream()).flatMap(List::stream).mapToInt(k -> k.tick).max().orElse(emote.end);
-                    emote.stop += Math.max(1, last) - emote.end;
-                    emote.end = Math.max(1, last);
-                }
-                emote.loop = v; emote.returnTick = v ? emote.end : 0; changed(); inspect();
-            }, holds(), true));
+            timing.addConfigurator(new BooleanConfigurator("Hold Last Frame (export)", this::holds, this::setHold, holds(), true));
             timing.addConfigurator(new BooleanConfigurator("Loop", () -> emote.loop, v -> { emote.loop = v; changed(); }, emote.loop, true));
             timing.addConfigurator(integer("Loop Return Tick", 0, 72000, () -> emote.returnTick, v -> emote.returnTick = v));
             timing.addConfigurator(new BooleanConfigurator("Ease Before Keyframe", () -> emote.easeBefore, v -> { emote.easeBefore = v; changed(); }, emote.easeBefore, true));
@@ -1357,6 +1389,316 @@ public final class EmoteStudioScreen extends ModularUIScreen {
             if (oreClass != null) button.addClass(oreClass);
             button.layout(l -> l.widthPercent(100));
             return row.addInlineChild(button);
+        }
+
+        Object mcp(String tool, JsonObject a) throws IOException {
+            switch (tool) {
+                case "get_state" -> { return state(); }
+                case "open_emote" -> {
+                    if (dirty() && !flag(a, "discard")) throw new IllegalStateException("Unsaved changes in " + (file == null ? "this emote" : file) + ": save first or pass discard=true");
+                    String f = str(a, "file");
+                    if (f == null) load(blank(), null); else load(EmoteStudioClient.read(f), EmoteStudioClient.fileName(f));
+                }
+                case "save" -> {
+                    String f = str(a, "file");
+                    if (f == null && file == null) throw new IllegalArgumentException("Never saved: pass file");
+                    String target = f == null ? file : EmoteStudioClient.fileName(f);
+                    if (target == null) throw new IllegalArgumentException("Bad file name: " + f);
+                    if (!target.equals(file)) {
+                        if (EmoteStudioClient.exists(target) && !flag(a, "overwrite")) throw new IllegalStateException("emotes/" + target + " exists: pass overwrite=true");
+                        cast.replaceAll(Emote::copyAsNew); emote = cast.get(actor);
+                    }
+                    if (!write(target)) throw new IOException("Save failed");
+                    return "Saved emotes/" + target;
+                }
+                case "get_emote_json" -> { return cast.get(character(a)).toJson(); }
+                case "set_emote_json" -> {
+                    int i = character(a);
+                    Emote e = Emote.parse(need(a, "json").getAsString());
+                    if (i > 0) e.extra.remove(PARTNERS);
+                    cast.set(i, e);
+                    actor = i; emote = e; picked.clear(); selectedKey = null; linkTick = null;
+                    for (String p : Emote.PARTS) if (e.animated(p)) expanded.add(p);
+                    changed(); inspect();
+                }
+                case "set_emote_settings" -> {
+                    if (has(a, "name")) emote.name = str(a, "name");
+                    if (has(a, "description")) emote.description = section(str(a, "description"));
+                    if (has(a, "author")) emote.author = section(str(a, "author"));
+                    if (has(a, "begin_tick")) emote.begin = Math.clamp(num(a, "begin_tick"), 0, 72000);
+                    if (has(a, "end_tick")) { boolean hold = holds(); emote.end = Math.clamp(num(a, "end_tick"), 1, 72000); if (hold) emote.returnTick = emote.end; }
+                    if (has(a, "stop_tick")) emote.stop = Math.clamp(num(a, "stop_tick"), 1, 72000);
+                    if (has(a, "loop")) emote.loop = flag(a, "loop");
+                    if (has(a, "return_tick")) emote.returnTick = Math.clamp(num(a, "return_tick"), 0, 72000);
+                    if (has(a, "ease_before")) emote.easeBefore = flag(a, "ease_before");
+                    if (has(a, "hold")) setHold(flag(a, "hold"));
+                    changed(); inspect();
+                    return state().get("emote");
+                }
+                case "get_keyframes" -> {
+                    String only = has(a, "part") ? part(a) : null, ch = str(a, "channel");
+                    JsonObject out = new JsonObject();
+                    emote.keys.forEach((p, channels) -> {
+                        if (only != null && !only.equals(p)) return;
+                        JsonObject po = new JsonObject();
+                        channels.forEach((c, list) -> {
+                            if (ch != null && !ch.equals(c)) return;
+                            JsonArray rows = new JsonArray();
+                            for (int i = 0; i < list.size(); i++) rows.add(keyJson(list.get(i), i > 0 && list.get(i - 1).custom()));
+                            po.add(c, rows);
+                        });
+                        out.add(p, po);
+                    });
+                    return out;
+                }
+                case "get_pose" -> {
+                    double t = has(a, "tick") ? need(a, "tick").getAsDouble() : time;
+                    String only = has(a, "part") ? part(a) : null;
+                    JsonObject out = new JsonObject();
+                    for (String p : Emote.PARTS) {
+                        if (only != null && !only.equals(p)) continue;
+                        JsonObject po = new JsonObject();
+                        for (Group g : Emote.groups(p)) for (String c : g.channels) po.addProperty(c, Preview.round(emote.value(p, c, t)));
+                        out.add(p, po);
+                    }
+                    return out;
+                }
+                case "set_keyframe" -> {
+                    String p = part(a); Group g = group(p, a); int t = has(a, "tick") ? num(a, "tick") : tick();
+                    float[] v = emote.values(p, g, t);
+                    if (a.get("values") instanceof JsonObject values) for (Map.Entry<String, JsonElement> e : values.entrySet()) {
+                        int i = g.channels.indexOf(e.getKey());
+                        if (i < 0) throw new IllegalArgumentException(g.title + " channels are " + g.channels + ", not " + e.getKey());
+                        v[i] = e.getValue().getAsFloat();
+                    }
+                    emote.keyGroup(p, g, t, v);
+                    if (has(a, "ease")) { String ease = ease(a); for (String c : g.channels) easeKey(emote.keys(p, c), emote.key(p, c, t), ease); }
+                    expanded.add(p); picked.clear(); picked.add(new Dot(p, g, t));
+                    changed(); inspect();
+                }
+                case "edit_channel_key" -> {
+                    String p = part(a), c = str(a, "channel");
+                    if (Emote.groups(p).stream().noneMatch(g -> g.channels.contains(c))) throw new IllegalArgumentException(p + " has no channel " + c);
+                    Emote.Key k = emote.keyChannel(p, c, has(a, "tick") ? num(a, "tick") : tick());
+                    if (has(a, "value")) k.value = need(a, "value").getAsFloat();
+                    if (has(a, "turn")) k.turn = num(a, "turn");
+                    if (has(a, "ease")) easeKey(emote.keys(p, c), k, ease(a));
+                    if (has(a, "out_t")) k.outT = need(a, "out_t").getAsFloat();
+                    if (has(a, "out_v")) k.outV = need(a, "out_v").getAsFloat();
+                    if (has(a, "in_t")) k.inT = need(a, "in_t").getAsFloat();
+                    if (has(a, "in_v")) k.inV = need(a, "in_v").getAsFloat();
+                    if (has(a, "new_tick")) { k.tick = Math.max(0, num(a, "new_tick")); emote.retime(p, c, k); }
+                    expanded.add(p);
+                    changed(); inspect();
+                    return keyJson(k, true);
+                }
+                case "remove_keyframe" -> {
+                    String p = part(a); int t = num(a, "tick");
+                    if (has(a, "channel")) emote.removeKey(p, str(a, "channel"), t);
+                    else if (has(a, "group")) emote.removeGroup(p, group(p, a), t);
+                    else for (Group g : Emote.groups(p)) emote.removeGroup(p, g, t);
+                    picked.clear(); selectedKey = null;
+                    changed(); inspect();
+                }
+                case "move_keyframes" -> {
+                    int from = num(a, "from_tick"), to = Math.max(0, num(a, "to_tick"));
+                    for (String p : parts(a)) for (Group g : Emote.groups(p))
+                        if (!has(a, "group") || g == group(p, a)) emote.moveGroup(p, g, from, to);
+                    picked.clear(); selectedKey = null;
+                    changed(); inspect();
+                }
+                case "copy_keyframes" -> {
+                    int from = num(a, "from_tick"), to = has(a, "to_tick") ? num(a, "to_tick") : from, at = Math.max(0, num(a, "at_tick"));
+                    String target = has(a, "to_part") ? part(a, "to_part") : null;
+                    if (target != null && !has(a, "part")) throw new IllegalArgumentException("to_part needs part");
+                    List<Copied> copies = new ArrayList<>();
+                    for (String p : parts(a)) for (Group g : Emote.groups(p)) for (int t : emote.ticks(p, g))
+                        if (t >= from && t <= to) copies.add(new Copied(target == null ? p : target, g, t - from, emote.values(p, g, t), emote.ease(p, g, t)));
+                    picked.clear();
+                    for (Copied c : copies) {
+                        if (!Emote.groups(c.part).contains(c.group)) continue;
+                        emote.keyGroup(c.part, c.group, at + c.offset, c.values);
+                        emote.setEase(c.part, c.group, at + c.offset, c.ease);
+                        picked.add(new Dot(c.part, c.group, at + c.offset)); expanded.add(c.part);
+                    }
+                    changed(); inspect();
+                    return "Copied " + picked.size() + " keyframe(s)";
+                }
+                case "key_whole_part" -> {
+                    String p = part(a); int t = has(a, "tick") ? num(a, "tick") : tick();
+                    picked.clear();
+                    for (Group g : Emote.groups(p)) { emote.keyGroup(p, g, t, emote.values(p, g, t)); picked.add(new Dot(p, g, t)); }
+                    expanded.add(p);
+                    changed(); inspect();
+                }
+                case "set_time" -> { playing = false; setTime(need(a, "tick").getAsDouble()); }
+                case "play" -> {
+                    if (has(a, "speed")) speed = Math.clamp(need(a, "speed").getAsFloat(), .25F, 2F);
+                    if (has(a, "loop")) loop = flag(a, "loop");
+                    setPlaying(!has(a, "playing") || flag(a, "playing"));
+                }
+                case "select_part" -> {
+                    String p = str(a, "part");
+                    if (has(a, "channel")) channel = str(a, "channel");
+                    selectPart(p == null || p.equals("none") ? null : part(a), flag(a, "bend"));
+                    if (has(a, "graph") && flag(a, "graph") != graphOpen) toggleGraph();
+                }
+                case "undo", "redo" -> {
+                    for (int i = has(a, "steps") ? num(a, "steps") : 1; i > 0; i--) if (tool.equals("undo")) undo(); else redo();
+                }
+                case "add_character" -> {
+                    if (cast.size() >= MAX_CAST) throw new IllegalStateException("At most " + MAX_CAST + " characters");
+                    if (has(a, "file")) addActor(EmoteStudioClient.read(str(a, "file")).copyAsNew()); else addActor();
+                    return "Added character " + (cast.size() - 1);
+                }
+                case "remove_character" -> {
+                    int i = character(a);
+                    if (i == 0) throw new IllegalArgumentException("Character 0 (P1) is the main file and can't be removed");
+                    dropActor(i);
+                }
+                case "edit_character" -> editActor(character(a));
+                case "set_character" -> {
+                    int i = character(a);
+                    Look l = look(i);
+                    if (has(a, "hidden")) l.hidden = flag(a, "hidden");
+                    if (has(a, "slim")) l.slim = flag(a, "slim");
+                    if (has(a, "skin")) {
+                        String s = str(a, "skin");
+                        if (s.equalsIgnoreCase("player")) l.skin = null;
+                        else if (DEFAULT_SKINS.contains(s.toLowerCase(Locale.ROOT))) l.skin = s.toLowerCase(Locale.ROOT);
+                        else if (skinFiles().contains(s)) l.skin = s;
+                        else throw new IllegalArgumentException("Unknown skin " + s + "; options: player, " + DEFAULT_SKINS + ", " + skinFiles());
+                    }
+                    if (has(a, "right_hand")) l.right = Held.valueOf(str(a, "right_hand").toUpperCase(Locale.ROOT));
+                    if (has(a, "left_hand")) l.left = Held.valueOf(str(a, "left_hand").toUpperCase(Locale.ROOT));
+                    Emote e = cast.get(i);
+                    float[] st = stage(e);
+                    String[] axes = {"x", "y", "z", "yaw"};
+                    for (int k = 0; k < 4; k++) if (has(a, axes[k])) { st[k] = need(a, axes[k]).getAsFloat(); setStage(e, st); }
+                    if (has(a, "preset")) {
+                        if (i == 0) throw new IllegalArgumentException("Presets place characters 1/2 relative to character 0");
+                        ridePreset(i, switch (str(a, "preset")) {
+                            case "carry_on" -> CARRY_ON; case "piggyback" -> PIGGYBACK;
+                            default -> throw new IllegalArgumentException("preset is carry_on or piggyback");
+                        });
+                    }
+                    changed(); inspect();
+                }
+                case "set_camera" -> {
+                    if (flag(a, "reset")) preview.resetView();
+                    if (has(a, "frame")) preview.cameraFrame = flag(a, "frame");
+                    if (has(a, "focus")) { int f = num(a, "focus"); preview.focus = f < 0 || f >= cast.size() ? -1 : f; }
+                    if (has(a, "yaw") || has(a, "pitch"))
+                        preview.scene.setCameraYawAndPitch(has(a, "yaw") ? need(a, "yaw").getAsFloat() : 45, has(a, "pitch") ? need(a, "pitch").getAsFloat() : 15);
+                    if (has(a, "zoom")) preview.scene.setZoom(need(a, "zoom").getAsFloat());
+                    inspect();
+                }
+                case "take_picture" -> {
+                    if (file == null) throw new IllegalStateException("Save the emote first (the picture is named after its file)");
+                    takePicture();
+                    return "Picture: emotes/" + String.join(", ", pictureFiles());
+                }
+                case "render_preview" -> {
+                    if (has(a, "tick")) { playing = false; setTime(need(a, "tick").getAsDouble()); }
+                    Path tmp = Files.createTempFile("emotestudio", ".png");
+                    try { preview.capture(tmp); return Files.readAllBytes(tmp); }
+                    finally { Files.deleteIfExists(tmp); }
+                }
+                default -> throw new IllegalArgumentException("Unknown tool " + tool);
+            }
+            return "OK · " + getTitle().getString() + " · tick " + tick();
+        }
+        JsonObject state() {
+            JsonObject o = new JsonObject();
+            o.addProperty("file", file);
+            o.addProperty("dirty", dirty());
+            o.addProperty("tick", time);
+            o.addProperty("playing", playing);
+            o.addProperty("speed", speed);
+            o.addProperty("loop_playback", loop);
+            o.addProperty("selected_part", part);
+            o.addProperty("graph_open", graphOpen);
+            o.addProperty("editing_character", actor);
+            o.addProperty("can_undo", !undo.isEmpty());
+            o.addProperty("can_redo", !redo.isEmpty());
+            JsonObject s = new JsonObject();
+            s.addProperty("name", emote.name);
+            s.addProperty("description", emote.description);
+            s.addProperty("author", emote.author);
+            s.addProperty("begin_tick", emote.begin);
+            s.addProperty("end_tick", emote.end);
+            s.addProperty("stop_tick", emote.stop);
+            s.addProperty("loop", emote.loop);
+            s.addProperty("return_tick", emote.returnTick);
+            s.addProperty("ease_before", emote.easeBefore);
+            s.addProperty("hold", holds());
+            o.add("emote", s);
+            JsonArray animated = new JsonArray();
+            for (String p : Emote.PARTS) if (emote.animated(p)) animated.add(p);
+            o.add("animated_parts", animated);
+            JsonArray chars = new JsonArray();
+            for (int i = 0; i < cast.size(); i++) {
+                Look l = look(i);
+                JsonObject c = new JsonObject();
+                c.addProperty("character", i);
+                c.addProperty("name", cast.get(i).name);
+                c.addProperty("file", file == null ? null : i == 0 ? file : partnerFile(file, i));
+                c.addProperty("hidden", l.hidden);
+                c.addProperty("skin", l.skin == null ? "player" : l.skin);
+                c.addProperty("slim", l.slim);
+                c.addProperty("right_hand", l.right.name());
+                c.addProperty("left_hand", l.left.name());
+                JsonArray st = new JsonArray();
+                for (float v : stage(cast.get(i))) st.add(v);
+                c.add("x_y_z_yaw", st);
+                chars.add(c);
+            }
+            o.add("characters", chars);
+            JsonObject cam = new JsonObject();
+            cam.addProperty("frame", preview.cameraFrame);
+            cam.addProperty("focus", preview.focus);
+            o.add("camera", cam);
+            JsonArray skins = new JsonArray();
+            skins.add("player");
+            DEFAULT_SKINS.forEach(skins::add);
+            skinFiles().forEach(skins::add);
+            o.add("skins", skins);
+            return o;
+        }
+        static JsonObject keyJson(Emote.Key k, boolean in) {
+            JsonObject o = new JsonObject();
+            o.addProperty("tick", k.tick);
+            o.addProperty("value", k.value);
+            o.addProperty("ease", easeName(k.ease));
+            if (k.turn != 0) o.addProperty("turn", k.turn);
+            if (k.arg != null) o.addProperty("ease_arg", k.arg);
+            if (k.custom()) { o.addProperty("out_t", k.outT); o.addProperty("out_v", k.outV); }
+            if (in) { o.addProperty("in_t", k.inT); o.addProperty("in_v", k.inV); }
+            return o;
+        }
+        int character(JsonObject a) {
+            int i = has(a, "character") ? num(a, "character") : actor;
+            if (i < 0 || i >= cast.size()) throw new IllegalArgumentException("character is 0.." + (cast.size() - 1));
+            return i;
+        }
+        static String part(JsonObject a) { return part(a, "part"); }
+        static String part(JsonObject a, String key) {
+            String p = str(a, key);
+            if (!Emote.PARTS.contains(p)) throw new IllegalArgumentException(key + " must be one of " + Emote.PARTS);
+            return p;
+        }
+        static List<String> parts(JsonObject a) { return has(a, "part") ? List.of(part(a)) : Emote.PARTS; }
+        static Group group(String p, JsonObject a) {
+            Group g;
+            try { g = Group.valueOf(str(a, "group").toUpperCase(Locale.ROOT)); }
+            catch (RuntimeException e) { throw new IllegalArgumentException("group must be rotation, position, scale or bend"); }
+            if (!Emote.groups(p).contains(g)) throw new IllegalArgumentException(p + " has no " + g.title + " group");
+            return g;
+        }
+        static String ease(JsonObject a) {
+            String e = str(a, "ease").toUpperCase(Locale.ROOT);
+            if (!EASES.contains(e)) throw new IllegalArgumentException("ease must be one of " + EASES);
+            return e;
         }
     }
 

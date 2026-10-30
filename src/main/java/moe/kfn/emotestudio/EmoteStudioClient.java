@@ -1,9 +1,10 @@
 package moe.kfn.emotestudio;
 
-import com.mojang.brigadier.arguments.StringArgumentType;
+import moe.kfn.emotestudio.mcp.McpServer;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.Commands;
-import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.network.chat.Component;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -23,10 +24,25 @@ public final class EmoteStudioClient {
     public static void registerCommands(RegisterClientCommandsEvent event) {
         event.getDispatcher().register(Commands.literal("emotestudio")
                 .executes(context -> open(null))
-                .then(Commands.argument("file", StringArgumentType.greedyString())
-                        .suggests((context, builder) -> SharedSuggestionProvider.suggest(files(), builder))
-                        .executes(context -> open(StringArgumentType.getString(context, "file")))));
+                .then(Commands.literal("mcp")
+                        .executes(context -> {
+                            context.getSource().sendSystemMessage(Component.literal("MCP server is " + (McpServer.running() ? "on: " + url() : "off")));
+                            return 1;
+                        })
+                        .then(Commands.literal("enable").executes(context -> {
+                            String error = McpServer.start();
+                            context.getSource().sendSystemMessage(error == null ? Component.literal("MCP server on: " + url())
+                                    : Component.literal("MCP server failed: " + error).withStyle(ChatFormatting.RED));
+                            return error == null ? 1 : 0;
+                        }))
+                        .then(Commands.literal("disable").executes(context -> {
+                            McpServer.stop();
+                            context.getSource().sendSystemMessage(Component.literal("MCP server off"));
+                            return 1;
+                        }))));
     }
+
+    private static String url() { return "http://127.0.0.1:" + McpServer.PORT + "/mcp"; }
 
     private static int open(String file) {
         Minecraft.getInstance().tell(() -> EmoteStudioScreen.open(file));

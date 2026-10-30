@@ -19,7 +19,7 @@ An in-game animation editor for Emotecraft emotes. Pose, keyframe and preview yo
 
 ## Opening the editor
 - `/emotestudio`: opens the editor and asks which emote to open or create
-- `/emotestudio <file>`: opens that file directly (Tab shows the files you can pick)
+- `/emotestudio mcp <enable|disable>`: turns the MCP server on or off (see AI control below)
 
 Emotes are read from and saved to `.minecraft/emotes/`. Only `.json` emotes can be edited. Emotecraft's binary `.emotecraft` files are not supported.
 
@@ -63,6 +63,13 @@ Open **Camera · emote picture**:
   - `P1` / `P2` / `P3`: saves the picture only for that character (`<name>.png`, `<name>_p2.png`…)
   - `All`: saves the same picture for every character in the scene
 - **Take Picture** saves the PNG beside the emote file (save the emote first)
+
+## AI control (MCP)
+While the game runs, Emote Studio serves an MCP server at `http://127.0.0.1:23367/mcp` (change the port with `-Demotestudio.mcp.port=<port>`). Every editor action is a tool: open/save, emote settings, keyframes and graph curves, playback, characters, camera, pictures, and `render_preview`, which returns an image of the scene.
+
+```
+claude mcp add --transport http emotestudio http://127.0.0.1:23367/mcp
+```
 
 # 💡 How It Works
 - Emote Format: Reads and writes Emotecraft's JSON format, so saved emotes play in Emotecraft directly

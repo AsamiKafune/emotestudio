@@ -25,9 +25,6 @@ public final class Emote {
     static boolean angle(String channel) {
         return switch (channel) { case "pitch", "yaw", "roll", "bend", "axis" -> true; default -> false; };
     }
-    public static float restValue(String part, String channel) {
-        return channel.equals("axis") && part.endsWith("Arm") ? 180 : defaultValue(part, channel);
-    }
     public static float defaultValue(String part, String channel) {
         if (channel.startsWith("scale")) return 1;
         float[] p = switch (part) {
@@ -246,8 +243,7 @@ public final class Emote {
             Key k = key(part, c, tick);
             if (k != null) { k.value = values[i]; k.turn = 0; }
             else {
-                float v = keys(part, c).isEmpty() && values[i] == defaultValue(part, c) ? restValue(part, c) : values[i];
-                anchor(part, c, tick); put(part, c, new Key(tick, v, ease, 0, null));
+                anchor(part, c, tick); put(part, c, new Key(tick, values[i], ease, 0, null));
             }
         }
     }
@@ -270,7 +266,7 @@ public final class Emote {
     public Key keyChannel(String part, String channel, int tick) {
         Key k = key(part, channel, tick);
         if (k == null) {
-            float value = keys(part, channel).isEmpty() ? restValue(part, channel) : value(part, channel, tick);
+            float value = keys(part, channel).isEmpty() ? defaultValue(part, channel) : value(part, channel, tick);
             anchor(part, channel, tick);
             put(part, channel, k = new Key(tick, value, DEFAULT_EASE, 0, null));
         }
@@ -279,7 +275,7 @@ public final class Emote {
     private void anchor(String part, String channel, int tick) {
         List<Key> list = keys(part, channel);
         if (tick > begin && (list.isEmpty() || list.getFirst().tick > tick))
-            put(part, channel, new Key(begin, restValue(part, channel), DEFAULT_EASE, 0, null));
+            put(part, channel, new Key(begin, defaultValue(part, channel), DEFAULT_EASE, 0, null));
     }
     public void removeKey(String part, String channel, int tick) { remove(part, channel, tick); }
     public void removeGroup(String part, Group group, int tick) { for (String c : group.channels) remove(part, c, tick); }

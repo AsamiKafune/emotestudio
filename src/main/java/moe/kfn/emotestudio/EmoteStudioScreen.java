@@ -320,10 +320,7 @@ public final class EmoteStudioScreen extends ModularUIScreen {
         void openDialog(boolean asActor) {
             Dialog dialog = new Dialog().setAutoClose(false).setClickOutsideClose(true);
             List<String> files = EmoteStudioClient.files();
-            Map<String, Emote> infos = new HashMap<>();
-            for (String f : files) {
-                try { infos.put(f, EmoteStudioClient.read(f)); } catch (IOException | RuntimeException ignored) {}
-            }
+            Map<String, Emote> infos = new java.util.concurrent.ConcurrentHashMap<>();
             dialog.setTitle((asActor ? "Import Character" : "Open Emote") + "  (" + files.size() + " in emotes folder)");
             var window = Minecraft.getInstance().getWindow();
             int listHeight = Math.clamp(window.getGuiScaledHeight() - 130, 60, 260);
@@ -360,6 +357,10 @@ public final class EmoteStudioScreen extends ModularUIScreen {
             };
             search.setTextResponder(text -> fill.run());
             fill.run();
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                for (String f : files)
+                    try { infos.put(f, EmoteStudioClient.read(f)); } catch (IOException | RuntimeException ignored) {}
+            }).thenRun(() -> Minecraft.getInstance().execute(fill));
             dialog.addContent(search); dialog.addContent(list);
             dialog.addButton(new Button().setText("Open Folder").setOnClick(e -> {
                 try { java.nio.file.Files.createDirectories(EmoteStudioClient.folder()); } catch (IOException ignored) {}
@@ -1713,8 +1714,9 @@ public final class EmoteStudioScreen extends ModularUIScreen {
                 float ax = aa.x, az = (shape(p).equals("torso") ? -1 : 1) * aa.z, flat = (float) Math.sqrt(ax * ax + az * az);
                 float[] old = values(p, Group.BEND);
                 float axis = flat < 1e-4F ? old[1] : (float) Math.toDegrees(Math.atan2(az, ax)), bend = (float) Math.toDegrees(angle) * flat;
-                float a1 = near(rad(axis), old[1]), a2 = near(rad(axis + 180), old[1]);
-                boolean flip = Math.abs(a2 - old[1]) < Math.abs(a1 - old[1]);
+                float ref = Math.abs(old[1] - 360 * Math.round(old[1] / 360)) > 90 ? 0 : old[1];
+                float a1 = near(rad(axis), ref), a2 = near(rad(axis + 180), ref);
+                boolean flip = Math.abs(a2 - ref) < Math.abs(a1 - ref);
                 editor.emote.keyGroup(p, Group.BEND, tick, new float[]{round(flip ? -bend : bend), flip ? a2 : a1});
             } else if (p.equals("torso")) {
                 float[] rot = values(p, Group.ROTATION);

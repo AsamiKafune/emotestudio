@@ -30,6 +30,8 @@ Emotes are read from and saved to `.minecraft/emotes/`. Only `.json` emotes can 
 4. Press `Space` to play the animation and check it
 5. Press `Ctrl + S` to save
 
+Turn on **MIRROR** and the other side follows the part you edit in real time (pose the right arm, the left arm mirrors it). Only the axes you actually rotate or move are keyed on the other side. **INVERT** does the same but reverses the forward/back swing, which is handy for walk cycles. Click the active one again to turn it off.
+
 Drag the end handle on the timeline to change the length. In **Emote Settings / Files** you can set Begin / End / Stop tick, Loop, Loop Return Tick, Display Name, Description and Author.
 
 ## Shortcuts

@@ -419,6 +419,7 @@ public final class EmoteStudioScreen extends ModularUIScreen {
 
         void changed() { commit(); rebuild(); preview.refresh(); }
         void commit() {
+            syncMirror();
             shareTiming();
             String now = snapshot();
             if (now.equals(committed)) return;
@@ -629,6 +630,20 @@ public final class EmoteStudioScreen extends ModularUIScreen {
             notice("Copied " + clipboard.size() + " keyframe(s)");
             return true;
         }
+        static String opposite(String p) {
+            return p.startsWith("right") ? "left" + p.substring(5) : p.startsWith("left") ? "right" + p.substring(4) : p;
+        }
+        /** 0 = off, 1 = mirror (opposite side copies the selected part), 2 = invert mirror (same, but pitch is reversed, e.g. walk swing) */
+        int mirror;
+        void toggleMirror(int mode) { mirror = mirror == mode ? 0 : mode; }
+        Emote mirrorEmote; String mirrorPart; Map<String, List<Emote.Key>> mirrorBefore;
+        /** mirror what changed on the selected part since the last snapshot, then re-snapshot */
+        void syncMirror() {
+            if (mirror != 0 && part != null && !opposite(part).equals(part) && mirrorEmote == emote && part.equals(mirrorPart))
+                emote.mirrorChanges(part, opposite(part), mirrorBefore, mirror == 2);
+            snapshotMirror();
+        }
+        void snapshotMirror() { mirrorEmote = emote; mirrorPart = part; mirrorBefore = part == null ? Map.of() : emote.snapshot(part); }
         boolean pasteKeys() {
             if (clipboard.isEmpty()) return false;
             boolean onePart = clipboard.stream().map(Copied::part).distinct().count() == 1;
@@ -664,6 +679,7 @@ public final class EmoteStudioScreen extends ModularUIScreen {
             rows.addChild(playhead);
             timeline.refreshCursor();
             timeline.slideRuler();
+            if (mirrorEmote != emote || !Objects.equals(part, mirrorPart)) snapshotMirror();
         }
 
         int rulerStep() {
@@ -1378,6 +1394,13 @@ public final class EmoteStudioScreen extends ModularUIScreen {
             speed.setCandidates(List.of("x0.25", "x0.5", "x1.0", "x1.5", "x2.0")).setSelected("x1.0", false)
                     .setOnValueChanged(v -> editor.speed = Float.parseFloat(v.substring(1)));
             speed.layout(l -> l.width(46).height(18));
+            Button[] mirrorButtons = new Button[2];
+            Runnable mirrorLabels = () -> {
+                mirrorButtons[0].setText(editor.mirror == 1 ? "[MIRROR]" : "MIRROR");
+                mirrorButtons[1].setText(editor.mirror == 2 ? "[INVERT]" : "INVERT");
+            };
+            mirrorButtons[0] = tool("MIRROR", 56, () -> { editor.toggleMirror(1); mirrorLabels.run(); });
+            mirrorButtons[1] = tool("INVERT", 52, () -> { editor.toggleMirror(2); mirrorLabels.run(); });
             tools.addChildren(
                     icon(glyph(G_START), () -> { editor.playing = false; editor.setTime(0); }), icon(glyph(G_BACK), () -> editor.step(-1)),
                     icon((g, mx, my, x, y, w, h, pt) -> glyph(editor.playing ? G_PAUSE : G_PLAY).draw(g, mx, my, x, y, w, h, pt), () -> editor.setPlaying(!editor.playing)),
@@ -1385,6 +1408,7 @@ public final class EmoteStudioScreen extends ModularUIScreen {
                     loop, speed, time,
                     new UIElement().layout(l -> l.flex(1)),
                     tool("ITEMS", 44, () -> editor.preview.showItems = !editor.preview.showItems), tool("GRAPH", 46, editor::toggleGraph), tool("KEY PART", 60, editor::keyPart), tool("DELETE", 48, editor::deletePicked), tool("COPY", 40, editor::copyKeys), tool("PASTE", 44, editor::pasteKeys),
+                    mirrorButtons[0], mirrorButtons[1],
                     tool("UNDO", 40, editor::undo), tool("REDO", 40, editor::redo),
                     tool("Fit", 28, this::fit), tool("−", 18, () -> zoom(-1)), tool("+", 18, () -> zoom(1)));
             addChild(tools);
@@ -1743,6 +1767,7 @@ public final class EmoteStudioScreen extends ModularUIScreen {
                 editor.emote.keyGroup(p, Group.POSITION, tick, new float[]{round(l.x), round(l.y), round(l.z)});
             } else return;
             editor.expanded.add(p);
+            editor.syncMirror();
             refresh();
         }
         static final float WAIST_Y = 12;

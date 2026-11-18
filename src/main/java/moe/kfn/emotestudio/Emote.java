@@ -277,6 +277,44 @@ public final class Emote {
         if (tick > begin && (list.isEmpty() || list.getFirst().tick > tick))
             put(part, channel, new Key(begin, defaultValue(part, channel), DEFAULT_EASE, 0, null));
     }
+    public Map<String, List<Key>> snapshot(String part) {
+        Map<String, List<Key>> out = new LinkedHashMap<>();
+        keys.getOrDefault(part, Map.of()).forEach((c, list) -> out.put(c, new ArrayList<>(list.stream().map(k -> mirrored(k, 1)).toList())));
+        return out;
+    }
+    static Key mirrored(Key k, float s) {
+        Key m = new Key(k.tick, k.value * s, k.ease, k.turn * (int) s, k.arg);
+        m.inT = k.inT; m.inV = k.inV * s; m.outT = k.outT; m.outV = k.outV * s;
+        return m;
+    }
+    static boolean same(Key a, Key b) {
+        return a.value == b.value && a.ease.equals(b.ease) && a.turn == b.turn && Objects.equals(a.arg, b.arg)
+                && a.inT == b.inT && a.inV == b.inV && a.outT == b.outT && a.outV == b.outV;
+    }
+    /** Copy onto {@code to}, reflected left/right, only the channel keys of {@code from} that changed since {@code before}. invert also reverses pitch. */
+    public void mirrorChanges(String from, String to, Map<String, List<Key>> before, boolean invert) {
+        Emote old = new Emote();
+        old.begin = begin; old.end = end; old.stop = stop; old.loop = loop; old.returnTick = returnTick; old.easeBefore = easeBefore;
+        old.keys.put(from, before);
+        Set<String> channels = new LinkedHashSet<>(before.keySet());
+        channels.addAll(keys.getOrDefault(from, Map.of()).keySet());
+        for (String c : channels) {
+            float s = switch (c) {
+                case "yaw", "roll", "x", "axis" -> -1;
+                case "pitch" -> invert ? -1 : 1;
+                default -> 1;
+            };
+            List<Key> was = old.keys(from, c);
+            boolean moved = was.stream().anyMatch(o -> key(from, c, o.tick) == null);
+            for (Key k : List.copyOf(keys(from, c))) {
+                Key o = old.key(from, c, k.tick);
+                // a fresh key that only holds the in-between value (keyGroup fills the whole group) is not an edit
+                boolean edited = o != null ? !same(o, k) : moved || Math.abs(k.value - old.value(from, c, k.tick)) > .02F;
+                if (edited) { anchor(to, c, k.tick); put(to, c, mirrored(k, s)); }
+            }
+            for (Key o : was) if (key(from, c, o.tick) == null) remove(to, c, o.tick);
+        }
+    }
     public void removeKey(String part, String channel, int tick) { remove(part, channel, tick); }
     public void removeGroup(String part, Group group, int tick) { for (String c : group.channels) remove(part, c, tick); }
     public void moveGroup(String part, Group group, int from, int to) {
